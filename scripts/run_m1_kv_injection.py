@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 from localsparse.config import LocalSparseConfig, ModelDims, AttentionConfig
 from localsparse.training.factoid_world import build_world, render_corpus, make_lm_batches
 from localsparse.workspace.kv_bank import WorkspaceKVBank
-from localsparse.logging import RunLogger
+from localsparse.logging import RunLogger, RunDirectory
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +69,9 @@ def load_veyra3(device, dtype):
     )
 
     report = surgery_veyra3(model, cfg)
-    print(f"[m1] Surgery: replaced={report.layers_replaced}, "
-          f"skipped={report.layers_skipped}")
+    replaced_count = len(report.layers_replaced) if isinstance(report.layers_replaced, list) else report.layers_replaced
+    skipped_count = len(report.layers_skipped) if isinstance(report.layers_skipped, list) else report.layers_skipped
+    print(f"[m1] Surgery: replaced={replaced_count}, skipped={skipped_count}")
     return model, tokenizer, cfg
 
 
@@ -134,7 +135,9 @@ def run_g6(model, tokenizer, device, args, run_dir: Path) -> dict:
     world_M = build_world(vocab_size=vocab_size, n_facts=args.n_facts, seed=1)
 
     # ---- weights path: train on set_W ----
-    logger = RunLogger(log_dir=run_dir / "g6_train")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_run = RunDirectory(root=run_dir / "g6_train")
+    logger = RunLogger(log_run, print_every=50)
     corpus = render_corpus(world_W, repeats_per_fact=args.repeats)
     batches = make_lm_batches(corpus, batch_size=args.batch_size,
                                seq_len=args.seq_len, device=device)

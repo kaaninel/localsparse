@@ -7,12 +7,13 @@ accuracy with and without workspace KV injection.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 import torch
 import torch.nn as nn
 
-from ..logging import RunLogger, FailureDetector, per_module_grad_norms
+from ..logging import RunLogger, RunDirectory, FailureDetector, per_module_grad_norms
 from ..training.factoid_world import FactoidWorld, build_qa_pairs, evaluate_qa
 from ..training.milestone1 import collect_branch_masses
 from ..workspace.kv_bank import WorkspaceKVBank
@@ -149,7 +150,7 @@ def run_g6_kv_injection(
     token_stream = render_corpus(world_W)
     batches_W = make_lm_batches(token_stream, batch_size=batch_size,
                                 seq_len=512, device=device)
-    dummy_logger = logger or RunLogger(log_dir=None)  # no-op if no dir given
+    dummy_logger = logger or RunLogger(RunDirectory(root=Path("/tmp/m1_g6_tmp")), print_every=50)
 
     stats_W = train_facts(
         model, batches=batches_W, optimizer=optimizer,

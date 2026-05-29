@@ -168,8 +168,15 @@ class WorkspaceKVBank:
         bank._bank = torch.load(path, map_location="cpu", weights_only=False)
         return bank
 
-    def workspace_seq_len(self, layer_idx: int = 0) -> int:
-        """Number of workspace tokens encoded (for diagnostics)."""
+    def workspace_seq_len(self, layer_idx: int = -1) -> int:
+        """Number of workspace tokens encoded (for diagnostics).
+        
+        Pass layer_idx=-1 (default) to use the first available layer.
+        """
+        if layer_idx == -1:
+            if not self._bank:
+                return 0
+            layer_idx = next(iter(self._bank))
         if layer_idx in self._bank:
             return self._bank[layer_idx][0].shape[2]
         return 0
