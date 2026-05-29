@@ -21,15 +21,117 @@ import torch
 import torch.nn as nn
 
 
+class _FakeGemma4Config:
+    vocab_size = 256
+    hidden_size = 32
+    num_hidden_layers = 4
+    num_attention_heads = 4
+    num_key_value_heads = 2
+    num_global_key_value_heads = 1
+    intermediate_size = 64
+    head_dim = 8
+    global_head_dim = 8
+    attention_k_eq_v = True
+    layer_types = ["sliding_attention", "full_attention",
+                   "sliding_attention", "full_attention"]
+    rope_parameters = {
+        "full_attention": {"rope_theta": 1_000_000.0,
+                           "partial_rotary_factor": 0.25},
+        "sliding_attention": {"rope_theta": 10_000.0},
+    }
+
+
+class _FakeSlidingAttn(nn.Module):
+    def __init__(self, hidden=32, num_q=4, num_kv=2, head_dim=8):
+        super().__init__()
+        self.q_proj = nn.Linear(hidden, num_q * head_dim, bias=False)
+        self.k_proj = nn.Linear(hidden, num_kv * head_dim, bias=False)
+        self.v_proj = nn.Linear(hidden, num_kv * head_dim, bias=False)
+        self.o_proj = nn.Linear(num_q * head_dim, hidden, bias=False)
+        self.q_norm = nn.RMSNorm(head_dim)
+        self.k_norm = nn.RMSNorm(head_dim)
+        self.v_norm = nn.RMSNorm(head_dim)
+
+
+class _FakeFullAttn(nn.Module):
+    def __init__(self, hidden=32, num_q=4, num_kv=1, head_dim=8):
+        super().__init__()
+        self.q_proj = nn.Linear(hidden, num_q * head_dim, bias=False)
+        self.k_proj = nn.Linear(hidden, num_kv * head_dim, bias=False)
+        self.o_proj = nn.Linear(num_q * head_dim, hidden, bias=False)
+        self.q_norm = nn.RMSNorm(head_dim)
+        self.k_norm = nn.RMSNorm(head_dim)
+        self.v_norm = nn.RMSNorm(head_dim)
+
+
+class _FakeLayer(nn.Module):
+    def __init__(self, is_full: bool):
+        super().__init__()
+        self.self_attn = _FakeFullAttn() if is_full else _FakeSlidingAttn()
+        self.layer_scalar = nn.Parameter(torch.tensor([1.5]))
+
+
+class _FakeInner(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            _FakeLayer(is_full=(t == "full_attention"))
+            for t in _FakeGemma4Config.layer_types
+        ])
+
+
+class _FakeModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.config = _FakeGemma4Config()
+        self.model = _FakeInner()
+
+
+class _FakeLegacyMultimodalModel(nn.Module):
+    """Older wrapper shape: model.language_model.model.layers."""
+    def __init__(self):
+        super().__init__()
+
+        class _OuterCfg:
+            text_config = _FakeGemma4Config()
+
+        class _LM(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = _FakeInner()
+
+        self.config = _OuterCfg()
+        self.language_model = _LM()
+
+
+class _FakeConditionalGenerationModel(nn.Module):
+    """HF Gemma4ForConditionalGeneration shape: model.model.language_model.layers."""
+    def __init__(self):
+        super().__init__()
+
+        class _OuterCfg:
+            text_config = _FakeGemma4Config()
+
+        class _Wrapper(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.language_model = _FakeInner()
+
+        self.config = _OuterCfg()
+        self.model = _Wrapper()
+
+
 def _build_tiny():
     """Tiny synthetic Gemma-4-style model with 4 layers (2 sliding + 2 full)."""
-    from tests.test_veyra_adapter import _FakeModel
     return _FakeModel()
 
 
 def _build_tiny_multimodal():
-    from tests.test_gemma4_adapter import _FakeMultimodalModel
-    return _FakeMultimodalModel()
+    return _FakeLegacyMultimodalModel()
+
+
+def _build_tiny_conditional_generation():
+    return _FakeConditionalGenerationModel()
 
 
 def main():
@@ -68,6 +170,14 @@ def main():
     assert report2.layers_path == "model.language_model.model.layers"
     print(f"  surgery report: replaced={report2.layers_replaced} "
           f"path={report2.layers_path}")
+
+    print("[gemma4_smoke] === conditional-generation variant ===")
+    m3 = _build_tiny_conditional_generation()
+    report3 = surgery_gemma4(m3)
+    assert report3.layers_replaced == [1, 3]
+    assert report3.layers_path == "model.model.language_model.layers"
+    print(f"  surgery report: replaced={report3.layers_replaced} "
+          f"path={report3.layers_path}")
 
     elapsed = time.time() - t0
     print(f"\n[gemma4_smoke] PASS in {elapsed:.2f}s")

@@ -102,18 +102,27 @@ def _detect_layer_types(hf_config) -> List[str]:
 
 
 def _veyra3_full_attn_dims(hf_config) -> ModelDims:
-    """ModelDims that match Veyra3's *full-attention* layer shape.
+    """ModelDims that match Gemma-4-style *full-attention* layer shapes.
 
-    Full-attn layers use `num_global_key_value_heads=1` (smaller than
-    the sliding layers' `num_key_value_heads=2`). Surgery uses these
-    dims so the replaced `q_proj`/`k_proj` line up with the Gemma4
-    full-attn weight shapes.
+    Veyra3 full-attn uses `num_global_key_value_heads=1` with the same
+    `head_dim` as sliding layers. Production Gemma 4 E models instead use a
+    wider `global_head_dim` for full attention. Surgery must mirror those
+    full-attn projection shapes exactly so q/k/v/o weights can be inherited.
     """
-    head_dim = getattr(hf_config, "head_dim", None) or (
-        hf_config.hidden_size // hf_config.num_attention_heads
+    head_dim = (
+        getattr(hf_config, "global_head_dim", None)
+        or getattr(hf_config, "head_dim", None)
+        or (hf_config.hidden_size // hf_config.num_attention_heads)
     )
-    num_kv = getattr(hf_config, "num_global_key_value_heads", None) or \
-             hf_config.num_key_value_heads
+    # HF Gemma4TextAttention uses num_global_key_value_heads only for the
+    # alternative K=V full-attention path. Otherwise full layers use
+    # num_key_value_heads even when global_head_dim is wider.
+    attention_k_eq_v = getattr(hf_config, "attention_k_eq_v", None)
+    if attention_k_eq_v is False:
+        num_kv = hf_config.num_key_value_heads
+    else:
+        num_kv = (getattr(hf_config, "num_global_key_value_heads", None)
+                  or hf_config.num_key_value_heads)
     return ModelDims(
         vocab_size=hf_config.vocab_size,
         hidden_size=hf_config.hidden_size,

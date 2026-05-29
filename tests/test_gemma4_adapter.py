@@ -48,6 +48,29 @@ class _FakeMultimodalModel(nn.Module):
         self.language_model = _LM()
 
 
+class _FakeConditionalGenerationModel(nn.Module):
+    """Mirrors HF Gemma4ForConditionalGeneration:
+    `model.model.language_model.layers`.
+    """
+    def __init__(self):
+        super().__init__()
+
+        class _OuterCfg:
+            text_config = _FakeGemma4Config()
+        self.config = _OuterCfg()
+
+        class _Wrapper(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.language_model = nn.Module()
+                self.language_model.layers = nn.ModuleList([
+                    _FakeLayer(is_full=(t == "full_attention"))
+                    for t in _FakeGemma4Config.layer_types
+                ])
+
+        self.model = _Wrapper()
+
+
 # ---------------------------------------------------------------------------
 # find_decoder_layers
 # ---------------------------------------------------------------------------
@@ -62,6 +85,13 @@ def test_find_layers_multimodal():
     m = _FakeMultimodalModel()
     layers, path = find_decoder_layers(m)
     assert path == "model.language_model.model.layers"
+    assert len(layers) == 4
+
+
+def test_find_layers_conditional_generation():
+    m = _FakeConditionalGenerationModel()
+    layers, path = find_decoder_layers(m)
+    assert path == "model.model.language_model.layers"
     assert len(layers) == 4
 
 
@@ -98,6 +128,29 @@ def test_surgery_multimodal_replaces_only_full_layers():
     layers = m.language_model.model.layers
     assert isinstance(layers[1].self_attn, Gemma4ThreeBranchAttention)
     assert isinstance(layers[3].self_attn, Gemma4ThreeBranchAttention)
+
+
+def test_surgery_conditional_generation_replaces_only_full_layers():
+    m = _FakeConditionalGenerationModel()
+    report = surgery_gemma4(m)
+    assert report.layers_replaced == [1, 3]
+    assert report.layers_skipped == [0, 2]
+    assert report.layers_path == "model.model.language_model.layers"
+    layers = m.model.language_model.layers
+    assert isinstance(layers[1].self_attn, Gemma4ThreeBranchAttention)
+    assert isinstance(layers[3].self_attn, Gemma4ThreeBranchAttention)
+
+
+def test_surgery_skips_layer_that_stores_shared_kv():
+    m = _FakeConditionalGenerationModel()
+    layers = m.model.language_model.layers
+    layers[3].self_attn.store_full_length_kv = True
+    report = surgery_gemma4(m)
+    assert report.layers_replaced == [1]
+    assert report.layers_skipped == [0, 2, 3]
+    assert "stores shared KV" in " ".join(report.notes)
+    assert isinstance(layers[1].self_attn, Gemma4ThreeBranchAttention)
+    assert isinstance(layers[3].self_attn, _FakeFullAttn)
 
 
 # ---------------------------------------------------------------------------

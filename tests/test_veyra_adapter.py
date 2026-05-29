@@ -163,6 +163,26 @@ def test_full_attn_dims_uses_global_kv_heads(model):
     assert dims.hidden_size == 32
 
 
+def test_full_attn_dims_uses_global_head_dim_when_present():
+    class _Gemma4ETextConfig:
+        vocab_size = 256
+        hidden_size = 32
+        num_hidden_layers = 4
+        num_attention_heads = 4
+        num_key_value_heads = 1
+        num_global_key_value_heads = None
+        intermediate_size = 64
+        head_dim = 8
+        global_head_dim = 16
+        attention_k_eq_v = False
+
+    dims = _veyra3_full_attn_dims(_Gemma4ETextConfig())
+    assert dims.num_kv_heads == 1
+    assert dims.num_q_heads == 4
+    assert dims.head_dim == 16
+    assert dims.hidden_size == 32
+
+
 def test_forward_runs_no_nan(model):
     surgery_veyra3(model)
     x = torch.randn(1, 16, 32)

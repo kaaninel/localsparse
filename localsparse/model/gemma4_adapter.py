@@ -5,9 +5,10 @@ implements the surgery for that architecture (`Gemma4ThreeBranchAttention`,
 RoPE threading, per-head norms, K=V tying, layer_scalar). The differences for
 production Gemma 4 E2B / E4B / 31B variants are:
 
-  1. **Layer location**: multimodal wrappers expose the LM via
-     `model.language_model.model.layers`; pure-text variants use
-     `model.model.layers`. We probe both at runtime.
+  1. **Layer location**: pure-text variants use `model.model.layers`;
+     conditional-generation wrappers expose the text decoder at
+     `model.model.language_model.layers`; older multimodal wrappers may use
+     `model.language_model.model.layers`. We probe all known paths at runtime.
 
   2. **Per-Layer Embeddings (PLE)**: an auxiliary residual signal added INSIDE
      each decoder layer. Because surgery only replaces `self_attn`, the PLE
@@ -50,16 +51,25 @@ def find_decoder_layers(model: nn.Module) -> tuple[nn.ModuleList, str]:
     """Locate the decoder-layer container, returning (layers, path_string).
 
     Tries (in order):
-      model.model.layers                       — pure text Gemma 4
-      model.language_model.model.layers        — multimodal Gemma 4
+      model.model.layers                       — pure text Gemma 4 causal LM
+      model.model.language_model.layers        — Gemma4ForConditionalGeneration
+      model.language_model.model.layers        — older multimodal wrapper
+      model.language_model.layers              — decoder-only wrapper
       model.text_model.model.layers            — alt multimodal naming
+      model.text_model.layers                  — alt decoder-only naming
     """
     candidates = [
         ("model.model.layers", lambda m: m.model.layers),
+        ("model.model.language_model.layers",
+         lambda m: m.model.language_model.layers),
         ("model.language_model.model.layers",
          lambda m: m.language_model.model.layers),
+        ("model.language_model.layers",
+         lambda m: m.language_model.layers),
         ("model.text_model.model.layers",
          lambda m: m.text_model.model.layers),
+        ("model.text_model.layers",
+         lambda m: m.text_model.layers),
     ]
     for path, getter in candidates:
         try:
@@ -106,6 +116,11 @@ def surgery_gemma4(
         old = layer.self_attn
         if not hasattr(old, "q_proj") or not hasattr(old, "k_proj"):
             notes.append(f"layer {idx}: missing q/k_proj, skipping")
+            skipped.append(idx)
+            continue
+        if getattr(old, "store_full_length_kv", False):
+            notes.append(
+                f"layer {idx}: stores shared KV for later HF layers, skipping")
             skipped.append(idx)
             continue
 
