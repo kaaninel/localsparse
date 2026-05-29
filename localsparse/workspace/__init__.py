@@ -5,3 +5,4 @@ from .consolidation import (
     ConsolidationOrchestrator, ConsolidationResult, MockSearcher,  # noqa: F401
     MockSynthesizer, SearchResult,
 )
+from .kv_bank import WorkspaceKVBank  # noqa: F401

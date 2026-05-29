@@ -316,6 +316,21 @@ class ThreeBranchAttention(nn.Module):
             k_full = k
             v_full = v
 
+        # ---- Workspace KV injection ----------------------------------------
+        # WorkspaceKVBank sets self._ws_kv = (k_ws, v_ws) before calling
+        # forward. These are pre-encoded KV representations of workspace
+        # chunks that are prepended as a "soft prefix" — all branches will
+        # attend to them naturally through the normal attention mechanism.
+        ws_kv = getattr(self, '_ws_kv', None)
+        if ws_kv is not None:
+            k_ws, v_ws = ws_kv  # (B, H_kv, T_ws, head_dim)
+            k_full = torch.cat([k_ws.to(dtype=k_full.dtype, device=k_full.device), k_full], dim=2)
+            v_full = torch.cat([v_ws.to(dtype=v_full.dtype, device=v_full.device), v_full], dim=2)
+
+        # ---- KV capture mode (used by WorkspaceKVBank.encode) --------------
+        if getattr(self, '_capture_kv', False):
+            self._captured_kv = (k_full.detach().cpu(), v_full.detach().cpu())
+
         # ---- Compute branch K/V ----------------------------------------
         T_kv = k_full.shape[2]
         # Pad k_full/v_full up to a multiple of super_block for pooling
