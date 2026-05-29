@@ -116,7 +116,7 @@ def surgery_minicpm(
     """
     hf_config = model.config
     model_dims = _infer_model_dims(hf_config)
-    attn_cfg = config.attn
+    attn_cfg = config.attention
 
     notes = []
 

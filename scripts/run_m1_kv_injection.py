@@ -37,7 +37,7 @@ from localsparse.logging import RunLogger
 def load_veyra3(device, dtype):
     """Load Veyra3-5M with ThreeBranchAttention surgery."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    from localsparse.model.veyra_adapter import surgery_veyra3, VeyraAdapterConfig
+    from localsparse.model.veyra_adapter import surgery_veyra3
 
     print("[m1] Loading veyra3-5m-base...")
     model = AutoModelForCausalLM.from_pretrained(
@@ -59,7 +59,7 @@ def load_veyra3(device, dtype):
             head_dim=getattr(model.config, "head_dim",
                              model.config.hidden_size // model.config.num_attention_heads),
         ),
-        attn=AttentionConfig(
+        attention=AttentionConfig(
             sliding_window=1024,
             compressed_block=32,
             super_block=512,
@@ -68,14 +68,7 @@ def load_veyra3(device, dtype):
         ),
     )
 
-    adp_cfg = VeyraAdapterConfig(
-        sliding_window=1024,
-        compressed_block=32,
-        super_block=512,
-        selected_top_k=8,
-        indexer_dim=32,
-    )
-    report = surgery_veyra3(model, adp_cfg)
+    report = surgery_veyra3(model, cfg)
     print(f"[m1] Surgery: replaced={report.layers_replaced}, "
           f"skipped={report.layers_skipped}")
     return model, tokenizer, cfg
@@ -106,7 +99,7 @@ def load_minicpm5(device, dtype):
             head_dim=getattr(model.config, "head_dim",
                              model.config.hidden_size // model.config.num_attention_heads),
         ),
-        attn=AttentionConfig(
+        attention=AttentionConfig(
             sliding_window=4096,
             compressed_block=64,
             super_block=4096,
