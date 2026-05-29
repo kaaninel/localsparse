@@ -24,6 +24,34 @@ from .milestone1 import collect_branch_masses
 
 
 # ---------------------------------------------------------------------------
+# Corpus rendering — match M0.5 sweep's proven recipe
+# ---------------------------------------------------------------------------
+
+def _auto_repeats(n_facts: int, *, batch_size: int, seq_len: int,
+                  min_repeats: int = 40,
+                  min_batches_per_epoch: int = 8) -> int:
+    """Mirror M0.5 capacity-sweep recipe: ensure ≥N unique batches per epoch.
+
+    M0.5 sweep (which converged to 0.89 @ N=64 / 0.73 @ N=128 on Veyra3-5M)
+    used `repeats=40` and auto-bumped to satisfy a "≥8 batches/epoch" floor.
+    """
+    tokens_per_fact_approx = 12
+    needed_tokens = batch_size * seq_len * min_batches_per_epoch
+    have = n_facts * min_repeats * tokens_per_fact_approx
+    if have >= needed_tokens:
+        return min_repeats
+    return needed_tokens // (n_facts * tokens_per_fact_approx) + 1
+
+
+def _make_factoid_batches(world: FactoidWorld, *, batch_size: int,
+                          seq_len: int, device, seed: int = 0):
+    reps = _auto_repeats(world.n_facts, batch_size=batch_size, seq_len=seq_len)
+    stream = render_corpus(world, repeats_per_fact=reps, seed=seed)
+    return make_lm_batches(stream, batch_size=batch_size, seq_len=seq_len,
+                           device=device), reps
+
+
+# ---------------------------------------------------------------------------
 # Branch-ablation control
 # ---------------------------------------------------------------------------
 
@@ -157,9 +185,8 @@ def run_a0_baseline(
     logger: Optional[RunLogger] = None,
     pass_threshold: float = 0.80,
 ) -> Dict[str, Any]:
-    token_stream = render_corpus(world, repeats_per_fact=10)
-    batches = make_lm_batches(token_stream, batch_size=batch_size,
-                              seq_len=seq_len, device=device)
+    batches, reps = _make_factoid_batches(
+        world, batch_size=batch_size, seq_len=seq_len, device=device)
     stats = train_to_convergence(
         model, batches, optimizer, max_steps=max_steps,
         logger=logger, label_prefix="a0",
@@ -170,6 +197,8 @@ def run_a0_baseline(
     return {
         "bench": "A0",
         "n_facts": world.n_facts,
+        "n_train_batches": len(batches),
+        "render_repeats": reps,
         "accuracy": acc,
         "pass_threshold": pass_threshold,
         "status": "pass" if (acc >= pass_threshold and stats["converged"]) else "fail",
@@ -209,9 +238,8 @@ def run_a1_branch_ablations(
     for v in variants:
         model = model_builder()
         opt = optimizer_builder(model)
-        token_stream = render_corpus(world, repeats_per_fact=10)
-        batches = make_lm_batches(token_stream, batch_size=batch_size,
-                                  seq_len=seq_len, device=device)
+        batches, _ = _make_factoid_batches(
+            world, batch_size=batch_size, seq_len=seq_len, device=device)
         logger = logger_factory(v["name"]) if logger_factory else None
         with BranchAblation(model,
                             disable=tuple(v.get("disable", ())),
@@ -268,9 +296,8 @@ def run_a2_mount_shootout(
     # 1. weights_path: train on facts directly, eval
     m = model_builder()
     opt = optimizer_builder(m)
-    token_stream = render_corpus(world, repeats_per_fact=10)
-    batches = make_lm_batches(token_stream, batch_size=batch_size,
-                              seq_len=seq_len, device=device)
+    batches, _ = _make_factoid_batches(
+        world, batch_size=batch_size, seq_len=seq_len, device=device)
     logger = logger_factory("weights") if logger_factory else None
     stats_w = train_to_convergence(
         m, batches, opt, max_steps=max_steps, logger=logger,
@@ -356,12 +383,13 @@ def run_a6_capacity_point(
     # weights path
     m = model_builder()
     opt = optimizer_builder(m)
-    token_stream = render_corpus(world, repeats_per_fact=10)
-    batches = make_lm_batches(token_stream, batch_size=batch_size,
-                              seq_len=seq_len, device=device)
+    batches, _ = _make_factoid_batches(
+        world, batch_size=batch_size, seq_len=seq_len, device=device, seed=seed)
     logger = logger_factory(f"n{n_facts}_w") if logger_factory else None
+    # Scale max_steps to fact count: M0.5 sweep needed ~200 epochs * batches
+    # for N=64, scaling up for larger N. Use generous cap.
     cap = min(max_steps_per_n,
-              max(400, int(200 * max(1, (n_facts.bit_length() - 5)))))
+              max(800, 200 * max(1, (n_facts.bit_length() - 5))))
     stats_w = train_to_convergence(m, batches, opt, max_steps=cap, logger=logger)
     pairs = build_qa_pairs(world)
     w_acc = evaluate_qa(m, pairs, device=device)["accuracy"]

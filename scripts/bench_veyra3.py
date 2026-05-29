@@ -95,7 +95,9 @@ def make_builder(device, dtype):
         return model.to(device)
 
     def optimizer_builder(model):
-        return torch.optim.AdamW(model.parameters(), lr=5e-4)
+        # lr=3e-4 matches the M0.5 capacity sweep that successfully reached
+        # 0.89 acc @ N=64 and 0.73 @ N=128. 5e-4 was empirically too aggressive.
+        return torch.optim.AdamW(model.parameters(), lr=3e-4)
 
     def get_tok():
         if "tok" not in tok_holder:
@@ -454,13 +456,21 @@ def section_a8(args, run_dir, builders, dry):
 
 def _headline_for(section: str, data: Dict) -> str:
     if section == "a0":
-        return f"acc={data.get('accuracy', 0):.3f} converged={data.get('converged')}"
+        return (f"acc={data.get('accuracy', 0):.3f} "
+                f"loss={data.get('final_loss', float('nan')):.3f} "
+                f"steps={data.get('steps', 0)} "
+                f"conv@={data.get('converged_at')}")
     if section == "a1":
-        return "; ".join(f"{v['name']}={v['accuracy']:.2f}"
+        return "; ".join(f"{v['name']}={v['accuracy']:.2f}(L{v.get('final_loss', 0):.2f})"
                         for v in data.get("variants", []))
     if section == "a2":
         r = data.get("ratios", {})
-        return f"kv/weights={r.get('kv_over_weights', 0):.2f}"
+        rs = data.get("results", {})
+        w = rs.get("weights_path", {})
+        return (f"kv/wts={r.get('kv_over_weights', 0):.2f} "
+                f"wts_acc={w.get('accuracy', 0):.2f} "
+                f"wts_loss={w.get('final_loss', float('nan')):.2f} "
+                f"wts_steps={w.get('steps', 0)}")
     if section == "a3":
         return f"top1={data.get('top1_routing_accuracy', 0):.2f}"
     if section == "a4":
@@ -468,6 +478,11 @@ def _headline_for(section: str, data: Dict) -> str:
     if section == "a5":
         return f"perf points={len(data.get('perf', []))}"
     if section == "a6":
+        pts = data.get("points", [])
+        if pts:
+            best = max(pts, key=lambda p: p.get("weights_accuracy", 0))
+            return (f"crossover N={data.get('crossover_N')} "
+                    f"best_wts={best.get('weights_accuracy', 0):.2f}@N{best.get('n_facts')}")
         return f"crossover N={data.get('crossover_N')}"
     if section == "a7":
         return f"max delta={data.get('max_abs_delta', 0):.3f}"

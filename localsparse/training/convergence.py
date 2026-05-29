@@ -23,11 +23,16 @@ class PlateauDetector:
 
     Call `update(loss)` every step. After enough history, `should_stop()`
     returns True when convergence is detected.
+
+    Defaults are deliberately conservative: M0.5 sweep showed Veyra3-5M needs
+    ≥400-800 effective steps to actually learn a small factoid corpus. Aggressive
+    plateau detection misclassifies the slow-but-real loss decay between steps
+    300-800 as "converged" while the model is still memorizing.
     """
     window: int = 100
-    consecutive: int = 3
-    tol: float = 0.01
-    min_steps: int = 200  # never declare convergence before this many steps
+    consecutive: int = 5
+    tol: float = 0.003
+    min_steps: int = 600  # never declare convergence before this many steps
 
     _losses: Deque[float] = field(default_factory=deque, repr=False)
     _means: Deque[float] = field(default_factory=deque, repr=False)
