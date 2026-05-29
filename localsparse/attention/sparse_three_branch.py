@@ -364,6 +364,22 @@ class ThreeBranchAttention(nn.Module):
 
         # ---- Gate mix --------------------------------------------------
         gate = F.softmax(self.branch_gate, dim=-1)  # (H, 3)
+        # Optional branch disabling (used by BranchAblation for A1 ablations):
+        # zero out specified branches AFTER softmax so the surviving branches
+        # are renormalised implicitly via the residual sum dropping out.
+        disabled = getattr(self, "_disabled_branches", None)
+        if disabled:
+            mask = torch.ones(3, device=gate.device, dtype=gate.dtype)
+            if "sliding" in disabled:
+                mask[0] = 0.0
+            if "selected" in disabled:
+                mask[1] = 0.0
+            if "compressed" in disabled:
+                mask[2] = 0.0
+            gate = gate * mask.view(1, 3)
+            # Renormalise so remaining branches still sum to 1
+            denom = gate.sum(dim=-1, keepdim=True).clamp(min=1e-6)
+            gate = gate / denom
         # Permute to (B, T, H, D)
         outs = torch.stack([
             out_sliding.transpose(1, 2),
