@@ -32,6 +32,11 @@ from localsparse.training.factoid_world import (
     make_lm_batches, render_corpus,
 )
 from localsparse.training.m15_runners import train_to_convergence
+from localsparse.training.distill import DistillRecipe, distill_warmstart, make_teacher_clone
+from localsparse.training.workspace_train import (
+    WorkspaceTrainRecipe, train_workspace_conditional,
+)
+from localsparse.training.routing_supervised import RoutingRecipe, train_router
 from localsparse.workspace.kv_bank import WorkspaceKVBank
 
 
@@ -200,7 +205,93 @@ def section_c2(args, run_dir, model, tok):
     }
 
 
-SECTIONS = {"c3": section_c3, "c1": section_c1, "c2": section_c2}
+SECTIONS = {"c3": section_c3, "c1": section_c1, "cb": None, "c2": section_c2}
+
+
+# ---------------------------------------------------------------------------
+# CB: apply Phase B recipe (distill -> ws_train -> route) before C2
+# ---------------------------------------------------------------------------
+
+def section_cb(args, run_dir, model, tok):
+    """Replay the Phase B recipe on Gemma 4 before final G6 eval.
+
+    Loads a ``recipe.json`` (produced by ``bench_veyra3.py`` B3) and applies
+    the documented training stages in order: distill warm-start, workspace
+    conditional training (held_out mode — bank must matter), router head.
+
+    Each stage is wrapped in try/except so a single failure produces an error
+    record without aborting C2. The trained model lives in-place; ``c2`` runs
+    on top of it.
+    """
+    recipe_path = Path(args.recipe_path) if args.recipe_path else None
+    if recipe_path is None or not recipe_path.exists():
+        return {
+            "section": "CB", "status": "skipped",
+            "note": f"no recipe.json at {recipe_path}; pass --recipe_path",
+        }
+    recipe_blob = json.loads(recipe_path.read_text())
+    print(f"[cb] loaded recipe from {recipe_path}")
+    print(f"[cb] training order: {recipe_blob.get('training_order')}")
+
+    out: Dict[str, Any] = {"section": "CB", "recipe_path": str(recipe_path),
+                           "stages": {}}
+
+    # --- Stage 1: distill warm-start ---
+    try:
+        print("[cb] stage 1: distill warm-start")
+        teacher = make_teacher_clone(model)
+        d_recipe = DistillRecipe.from_dict(recipe_blob.get("distill", {}))
+        d_stats = distill_warmstart(
+            student=model, teacher=teacher, recipe=d_recipe,
+            device=args.device, vocab_size=model.config.vocab_size,
+            logger=make_logger(run_dir, "cb_distill"),
+        )
+        del teacher
+        if args.device.type == "cuda":
+            torch.cuda.empty_cache()
+        out["stages"]["distill"] = {"status": "ok", **d_stats}
+    except Exception as e:
+        out["stages"]["distill"] = {"status": "error", "error": str(e)[:300]}
+        import traceback; traceback.print_exc()
+
+    # --- Stage 2: workspace conditional (held_out — forces bank use) ---
+    try:
+        print("[cb] stage 2: workspace conditional (held_out)")
+        w_recipe = WorkspaceTrainRecipe.from_dict(
+            recipe_blob.get("workspace_held_out", {}))
+        w_stats = train_workspace_conditional(
+            model, tok, device=args.device, recipe=w_recipe,
+            vocab_size=model.config.vocab_size, mode="held_out",
+            logger=make_logger(run_dir, "cb_ws"),
+            label_prefix="cb_ws", eval_n_facts=w_recipe.n_facts_per_world,
+        )
+        out["stages"]["workspace_held_out"] = {"status": "ok", **w_stats}
+    except Exception as e:
+        out["stages"]["workspace_held_out"] = {"status": "error",
+                                                "error": str(e)[:300]}
+        import traceback; traceback.print_exc()
+
+    # --- Stage 3: routing head ---
+    try:
+        print("[cb] stage 3: routing head")
+        r_recipe = RoutingRecipe.from_dict(recipe_blob.get("routing", {}))
+        r_stats = train_router(
+            model, device=args.device, vocab_size=model.config.vocab_size,
+            n_banks=4, facts_per_bank=32, recipe=r_recipe,
+            logger=make_logger(run_dir, "cb_router"),
+        )
+        out["stages"]["routing"] = {"status": "ok", **r_stats}
+    except Exception as e:
+        out["stages"]["routing"] = {"status": "error", "error": str(e)[:300]}
+        import traceback; traceback.print_exc()
+
+    n_ok = sum(1 for s in out["stages"].values() if s.get("status") == "ok")
+    out["n_stages_ok"] = n_ok
+    out["status"] = "pass" if n_ok == 3 else ("partial" if n_ok > 0 else "fail")
+    return out
+
+
+SECTIONS["cb"] = section_cb
 
 
 def main():
@@ -216,6 +307,8 @@ def main():
     p.add_argument("--c2_seq_len", type=int, default=512)
     p.add_argument("--c2_bank_max_length", type=int, default=1024)
     p.add_argument("--c2_threshold", type=float, default=0.6)
+    p.add_argument("--recipe_path", default=None,
+                   help="path to recipe.json from bench_veyra3 B3 (for cb stage)")
     args = p.parse_args()
     args.device = parse_device(args.device)
     args.dtype = parse_dtype(args.dtype)
@@ -235,7 +328,8 @@ def main():
         "notes": report.notes,
     }, indent=2))
 
-    sections = ["c3", "c1", "c2"] if args.section == "all" else [args.section]
+    sections = (["c3", "c1", "cb", "c2"] if args.section == "all"
+                else [args.section])
     summary: Dict[str, Any] = {"sections": {}}
     for s in sections:
         print(f"\n=== [STAGE {s.upper()}] ===")

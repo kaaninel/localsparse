@@ -20,7 +20,7 @@ DEVICE="${DEVICE:-cpu}"
 DTYPE="${DTYPE:-float32}"
 RUN_DIR="/tmp/local_smoke_$$"
 mkdir -p "$RUN_DIR"
-for s in a0 a1 a2 a3 a4 a5 a6 a7 a8; do
+for s in a0 a1 a2 a3 a4 a5 a6 a7 b0 b1 b2 b3 a8; do
   echo "  -- section $s --"
   python scripts/bench_veyra3.py \
     --section "$s" --device "$DEVICE" --dtype "$DTYPE" \

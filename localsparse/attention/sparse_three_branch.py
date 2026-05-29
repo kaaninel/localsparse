@@ -323,9 +323,20 @@ class ThreeBranchAttention(nn.Module):
         # attend to them naturally through the normal attention mechanism.
         ws_kv = getattr(self, '_ws_kv', None)
         if ws_kv is not None:
-            k_ws, v_ws = ws_kv  # (B, H_kv, T_ws, head_dim)
-            k_full = torch.cat([k_ws.to(dtype=k_full.dtype, device=k_full.device), k_full], dim=2)
-            v_full = torch.cat([v_ws.to(dtype=v_full.dtype, device=v_full.device), v_full], dim=2)
+            k_ws, v_ws = ws_kv  # (B_ws, H_kv, T_ws, head_dim); B_ws is usually 1
+            B_live = k_full.shape[0]
+            k_ws = k_ws.to(dtype=k_full.dtype, device=k_full.device)
+            v_ws = v_ws.to(dtype=v_full.dtype, device=v_full.device)
+            if k_ws.shape[0] != B_live:
+                if k_ws.shape[0] == 1:
+                    k_ws = k_ws.expand(B_live, -1, -1, -1)
+                    v_ws = v_ws.expand(B_live, -1, -1, -1)
+                else:
+                    raise RuntimeError(
+                        f"workspace KV batch={k_ws.shape[0]} cannot align "
+                        f"with live batch={B_live}")
+            k_full = torch.cat([k_ws, k_full], dim=2)
+            v_full = torch.cat([v_ws, v_full], dim=2)
 
         # ---- KV capture mode (used by WorkspaceKVBank.encode) --------------
         if getattr(self, '_capture_kv', False):
