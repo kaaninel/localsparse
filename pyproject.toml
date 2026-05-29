@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localsparse"
+version = "0.1.0"
+description = "Small dense LLM with sparse 3-branch attention and disk-backed soft-mounted workspace context"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "kaaninel" }]
+dependencies = [
+    "torch>=2.3",
+    "numpy>=1.26",
+    "lmdb>=1.4",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "rich>=13.7",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+training = [
+    "transformers>=4.45",
+    "accelerate>=0.34",
+    "datasets>=2.20",
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",
+]
+unsloth = ["unsloth>=2025.1"]
+eval = ["scikit-learn>=1.4"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+localsparse = "localsparse.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["localsparse*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
