@@ -116,6 +116,23 @@ def surgery_gemma4(
     hf_cfg = model.config
     # For multimodal wrappers, the language config nests one level down
     text_cfg = getattr(hf_cfg, "text_config", hf_cfg)
+    # Backfill top-level vocab_size on multimodal configs so stale
+    # downstream code (notebooks opened before the fix) keeps working.
+    if not hasattr(hf_cfg, "vocab_size") or getattr(hf_cfg, "vocab_size", None) is None:
+        vs = getattr(text_cfg, "vocab_size", None)
+        if vs is None:
+            try:
+                vs = int(model.get_input_embeddings().weight.shape[0])
+            except Exception:
+                vs = None
+        if vs is not None:
+            try:
+                object.__setattr__(hf_cfg, "vocab_size", int(vs))
+            except Exception:
+                try:
+                    hf_cfg.vocab_size = int(vs)
+                except Exception:
+                    pass
     layer_types = _detect_layer_types(text_cfg)
     full_dims = _veyra3_full_attn_dims(text_cfg)
     if base_config is None:
