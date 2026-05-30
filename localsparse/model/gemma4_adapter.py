@@ -47,6 +47,28 @@ class Gemma4ESurgeryReport(VeyraSurgeryReport):
     layers_path: str = ""
 
 
+def resolve_vocab_size(model: nn.Module) -> int:
+    """Return vocab_size for any Gemma 4 variant (multimodal or pure-text).
+
+    Gemma4ForConditionalGeneration nests the language config under
+    ``config.text_config``; pure-text Gemma 4 exposes ``config.vocab_size``
+    directly. Falls back to the embedding weight if neither is present.
+    """
+    cfg = model.config
+    if hasattr(cfg, "vocab_size") and cfg.vocab_size is not None:
+        return int(cfg.vocab_size)
+    text_cfg = getattr(cfg, "text_config", None)
+    if text_cfg is not None and getattr(text_cfg, "vocab_size", None) is not None:
+        return int(text_cfg.vocab_size)
+    # Fallback: read from the input embedding weight
+    try:
+        emb = model.get_input_embeddings()
+        return int(emb.weight.shape[0])
+    except Exception as e:
+        raise AttributeError(
+            f"Could not resolve vocab_size for {type(model).__name__}: {e}")
+
+
 def find_decoder_layers(model: nn.Module) -> tuple[nn.ModuleList, str]:
     """Locate the decoder-layer container, returning (layers, path_string).
 
